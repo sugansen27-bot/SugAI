@@ -1,0 +1,164 @@
+import { useState } from 'react';
+import { Copy, Printer } from 'lucide-react';
+import FilePicker from '../FilePicker';
+import Markdown from '../Markdown';
+import ShButton from '../ShButton';
+import ShField from '../ShField';
+import ShStatus from '../ShStatus';
+import { aiMakeGuide } from '@/lib/studyhub/api';
+import { prepareAttachments } from '@/lib/studyhub/files';
+import { db, uid } from '@/lib/studyhub/storage';
+import { cardClass, inputClass, h2Class, subClass, tagClass, labelClass } from '@/lib/studyhub/ui';
+
+const LEVELS = ['Middle school', 'High school', 'AP / Honors', 'College'];
+
+export default function GuidesTab() {
+  const [kind, setKind] = useState('guide');
+  const [level, setLevel] = useState('High school');
+  const [desc, setDesc] = useState('');
+  const [files, setFiles] = useState([]);
+  const [guides, setGuides] = useState(() => db.get('guides', []));
+  const [openId, setOpenId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState('');
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  const open = guides.find((g) => g.id === openId) || null;
+  const save = (list) => {
+    const trimmed = list.slice(0, 40);
+    setGuides(trimmed);
+    db.set('guides', trimmed);
+  };
+
+  async function create() {
+    if (!desc.trim() && !files.length) {
+      setError('Tell me the topic or add a photo of your notes.');
+      return;
+    }
+    setError('');
+    setBusy(true);
+    setStatus('Creating it — this can take up to a minute.');
+    try {
+      const { fileUrls, texts } = await prepareAttachments(files);
+      const data = await aiMakeGuide({ kind, level, desc: desc.trim(), fileUrls, texts });
+      const guide = {
+        id: uid(),
+        type: kind,
+        title: (desc.trim() || 'From my notes').slice(0, 60),
+        date: Date.now(),
+        text: data.text || ''
+      };
+      save([guide, ...guides]);
+      setOpenId(guide.id);
+      setFiles([]);
+      setStatus('');
+      window.scrollTo(0, 0);
+    } catch (e) {
+      setError(e.message || 'Something went wrong.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className={cardClass}>
+        <h2 className={h2Class}>Study guides & cheat sheets</h2>
+        <p className={subClass}>Pick one, describe the topic, and/or add a photo of your notes.</p>
+
+        <div className="grid grid-cols-2 gap-3">
+          <ShField label="Make a">
+            <select className={inputClass} value={kind} onChange={(e) => setKind(e.target.value)}>
+              <option value="guide">Study guide</option>
+              <option value="cheat">Cheat sheet</option>
+            </select>
+          </ShField>
+          <ShField label="Level">
+            <select className={inputClass} value={level} onChange={(e) => setLevel(e.target.value)}>
+              {LEVELS.map((l) => (
+                <option key={l}>{l}</option>
+              ))}
+            </select>
+          </ShField>
+        </div>
+
+        <ShField label="Topic or request">
+          <textarea
+            className={`${inputClass} min-h-[90px]`}
+            placeholder='e.g. "Cheat sheet for all trig identities" or "Study guide for the causes of WW1"'
+            value={desc}
+            onChange={(e) => setDesc(e.target.value)}
+          />
+        </ShField>
+
+        <span className={labelClass}>Photos / files (optional)</span>
+        <FilePicker files={files} onChange={setFiles} />
+
+        <div className="mt-3.5">
+          <ShButton onClick={create} disabled={busy}>
+            {busy ? 'Working…' : 'Create it →'}
+          </ShButton>
+        </div>
+
+        <ShStatus message={error || status} error={Boolean(error)} />
+      </div>
+
+      {open ? (
+        <div className={cardClass}>
+          <div className="mb-2 flex flex-wrap items-center gap-2 print:hidden">
+            <span className={`${tagClass} flex-1`}>{open.type === 'cheat' ? 'Cheat sheet' : 'Study guide'}</span>
+            <ShButton
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                navigator.clipboard?.writeText(open.text);
+                setCopied(true);
+              }}
+            >
+              <Copy className="h-3.5 w-3.5" /> {copied ? 'Copied' : 'Copy'}
+            </ShButton>
+            <ShButton variant="secondary" size="sm" onClick={() => window.print()}>
+              <Printer className="h-3.5 w-3.5" /> Print / PDF
+            </ShButton>
+          </div>
+          <Markdown text={open.text} />
+        </div>
+      ) : null}
+
+      {guides.length ? (
+        <div className={`${cardClass} print:hidden`}>
+          <h2 className={h2Class}>Saved</h2>
+          {guides.map((g) => (
+            <div
+              key={g.id}
+              className={`flex items-center gap-2 rounded-[9px] p-2 ${g.id === openId ? 'bg-sh-line' : ''}`}
+            >
+              <button
+                type="button"
+                className="flex-1 truncate text-left text-[14px]"
+                onClick={() => {
+                  setOpenId(g.id);
+                  setCopied(false);
+                  window.scrollTo(0, 0);
+                }}
+              >
+                {g.type === 'cheat' ? '📄' : '📘'} {g.title}
+              </button>
+              <button
+                type="button"
+                className="text-[11px] text-sh-mut hover:text-sh-bad"
+                onClick={() => {
+                  save(guides.filter((entry) => entry.id !== g.id));
+                  if (openId === g.id) setOpenId(null);
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
