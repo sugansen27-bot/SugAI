@@ -1,0 +1,220 @@
+import { useState } from 'react';
+import { Copy } from 'lucide-react';
+import FilePicker from '../FilePicker';
+import SavedBox from '../SavedBox';
+import ShButton from '../ShButton';
+import ShField from '../ShField';
+import ShStatus from '../ShStatus';
+import { aiGradeWriting } from '@/lib/studyhub/api';
+import { prepareAttachments } from '@/lib/studyhub/files';
+import { escapeHtml } from '@/lib/studyhub/markdown';
+import { db, uid } from '@/lib/studyhub/storage';
+import { cardClass, inputClass, h2Class, subClass, tagClass, labelClass } from '@/lib/studyhub/ui';
+
+const TYPES = ['Essay', 'Short answer', 'Math problem / solution', 'Lab report', 'Other writing'];
+const LEVELS = ['Middle school', 'High school', 'AP', 'College'];
+
+export default function WritingTab() {
+  const [type, setType] = useState('Essay');
+  const [level, setLevel] = useState('High school');
+  const [topic, setTopic] = useState('');
+  const [work, setWork] = useState('');
+  const [files, setFiles] = useState([]);
+  const [result, setResult] = useState(null);
+  const [saved, setSaved] = useState(() => db.get('writings', []));
+  const [openId, setOpenId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState('');
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  const store = (list) => {
+    const trimmed = list.slice(0, 30);
+    setSaved(trimmed);
+    db.set('writings', trimmed);
+  };
+
+  async function grade() {
+    if (!work.trim() && !files.length) {
+      setError('Paste your work or add a photo of it.');
+      return;
+    }
+    setError('');
+    setCopied(false);
+    setOpenId(null);
+    setBusy(true);
+    setStatus('Grading it honestly — this can take up to a minute.');
+    try {
+      const { fileUrls, texts } = await prepareAttachments(files);
+      const data = await aiGradeWriting({
+        type,
+        level,
+        topic: topic.trim(),
+        work: work.trim(),
+        fileUrls,
+        texts
+      });
+      const entry = {
+        id: uid(),
+        ts: Date.now(),
+        title: (topic.trim() || `${type} · ${level}`).slice(0, 60),
+        result: data
+      };
+      store([entry, ...saved]);
+      setOpenId(entry.id);
+      setResult(data);
+      setStatus('');
+      window.scrollTo(0, 0);
+    } catch (e) {
+      setError(e.message || 'Something went wrong.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const revisedHtml = result
+    ? escapeHtml(result.revised || '')
+        .replace(/\[\[U\]\]/g, '<mark>')
+        .replace(/\[\[\/U\]\]/g, '</mark>')
+    : '';
+
+  return (
+    <div>
+      <div className={cardClass}>
+        <h2 className={h2Class}>Honest writing feedback</h2>
+        <p className={subClass}>
+          Essays, short answers, lab reports, math work — brutal grading, then a fixed version where your own
+          words are highlighted.
+        </p>
+
+        <div className="grid grid-cols-2 gap-3">
+          <ShField label="What is it?">
+            <select className={inputClass} value={type} onChange={(e) => setType(e.target.value)}>
+              {TYPES.map((t) => (
+                <option key={t}>{t}</option>
+              ))}
+            </select>
+          </ShField>
+          <ShField label="Grade level">
+            <select className={inputClass} value={level} onChange={(e) => setLevel(e.target.value)}>
+              {LEVELS.map((l) => (
+                <option key={l}>{l}</option>
+              ))}
+            </select>
+          </ShField>
+        </div>
+
+        <ShField label="Topic / prompt / question">
+          <input
+            className={inputClass}
+            placeholder="What was the assignment?"
+            value={topic}
+            onChange={(e) => setTopic(e.target.value)}
+          />
+        </ShField>
+
+        <ShField label="Paste your work">
+          <textarea
+            className={`${inputClass} min-h-[200px]`}
+            placeholder="Paste it here, or add a photo of it below"
+            value={work}
+            onChange={(e) => setWork(e.target.value)}
+          />
+        </ShField>
+
+        <span className={labelClass}>Photos / files (optional)</span>
+        <FilePicker files={files} onChange={setFiles} />
+
+        <div className="mt-3.5">
+          <ShButton onClick={grade} disabled={busy}>
+            {busy ? 'Working…' : 'Grade it — no mercy →'}
+          </ShButton>
+        </div>
+
+        <ShStatus message={error || status} error={Boolean(error)} />
+      </div>
+
+      {result ? (
+        <div>
+          <div className={`${cardClass} text-center`}>
+            <div className={tagClass}>Your grade</div>
+            <div className="text-[48px] font-extrabold leading-tight tracking-[-2px]">{result.grade}</div>
+            <div className={subClass}>{result.score}/100</div>
+            <p className="mt-1 text-left">{result.verdict}</p>
+          </div>
+
+          {result.categories?.length ? (
+            <div className={cardClass}>
+              <h2 className={h2Class}>Breakdown</h2>
+              {result.categories.map((c, i) => (
+                <div key={i} className="mt-2 rounded-[10px] border border-sh-line p-3 text-[14px]">
+                  <b>
+                    {c.name} — {c.score}
+                  </b>
+                  <br />
+                  {c.note}
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {result.fixes?.length ? (
+            <div className={cardClass}>
+              <h2 className={h2Class}>What to fix</h2>
+              {result.fixes.map((f, i) => (
+                <div key={i} className="mt-2 rounded-[10px] border border-sh-line p-3 text-[14px]">
+                  <span className={subClass}>Yours:</span> “{f.original}”
+                  <br />
+                  <b>Problem:</b> {f.problem}
+                  <br />
+                  <b>Try:</b> {f.fix}
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {result.revised ? (
+            <div className={cardClass}>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className={`${h2Class} flex-1`}>Fixed version</h2>
+                <ShButton
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    navigator.clipboard?.writeText((result.revised || '').replace(/\[\[\/?U\]\]/g, ''));
+                    setCopied(true);
+                  }}
+                >
+                  <Copy className="h-3.5 w-3.5" /> {copied ? 'Copied' : 'Copy'}
+                </ShButton>
+              </div>
+              <p className={subClass}>
+                <mark>Highlighted</mark> = your original words. Everything else is changed or added.
+              </p>
+              <div
+                className="whitespace-pre-wrap text-[15px] leading-[1.7]"
+                dangerouslySetInnerHTML={{ __html: revisedHtml }}
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      <SavedBox
+        label="Saved feedback"
+        items={saved}
+        openId={openId}
+        onOpen={(item) => {
+          setResult(item.result);
+          setOpenId(item.id);
+          setCopied(false);
+          window.scrollTo(0, 0);
+        }}
+        onDelete={(id) => {
+          store(saved.filter((entry) => entry.id !== id));
+          if (openId === id) setOpenId(null);
+        }}
+      />
+    </div>
+  );
+}
