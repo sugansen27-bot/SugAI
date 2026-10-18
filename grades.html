@@ -1,0 +1,78 @@
+import { useState } from 'react';
+import ClassCard from './ClassCard';
+import ShButton from '../ShButton';
+import { calcClass, gpaOf, newClass } from '@/lib/studyhub/grades';
+import { db } from '@/lib/studyhub/storage';
+import { cardClass, h2Class, subClass } from '@/lib/studyhub/ui';
+
+export default function GradesTab() {
+  const [classes, setClasses] = useState(() => db.get('classes', []));
+
+  const save = (list) => {
+    setClasses(list);
+    db.set('classes', list);
+  };
+
+  const update = (index, next) => save(classes.map((c, i) => (i === index ? next : c)));
+  const remove = (index) => save(classes.filter((_, i) => i !== index));
+  const calculate = (index) =>
+    save(classes.map((c, i) => (i === index ? { ...c, res: calcClass(c), dirty: false } : c)));
+  const add = () => {
+    save([...classes, newClass()]);
+    window.scrollTo(0, document.body.scrollHeight);
+  };
+
+  const gpa = gpaOf(classes);
+
+  return (
+    <div>
+      <div className={cardClass}>
+        <h2 className={h2Class}>GPA & grade calculator</h2>
+        <p className={subClass}>
+          Add each class. For summative and formative, enter your final grade as a percentage or as points
+          (#/#), plus how much each counts. Weights don't have to add up to 100.
+        </p>
+
+        {gpa.credits ? (
+          <div className="grid grid-cols-2 gap-2">
+            <div className="rounded-[10px] bg-sh-bg p-3 text-[14px]">
+              Unweighted GPA
+              <br />
+              <b className="text-[20px]">{gpa.unweighted.toFixed(2)}</b>
+            </div>
+            <div className="rounded-[10px] bg-sh-bg p-3 text-[14px]">
+              Weighted GPA
+              <br />
+              <b className="text-[20px]">{gpa.weighted.toFixed(2)}</b>
+            </div>
+          </div>
+        ) : (
+          <p className={subClass}>Your GPA shows up here after you calculate a class.</p>
+        )}
+      </div>
+
+      {classes.length ? (
+        classes.map((cls, index) => (
+          <ClassCard
+            key={index}
+            cls={cls}
+            onChange={(next) => update(index, next)}
+            onRemove={() => remove(index)}
+            onCalc={() => calculate(index)}
+          />
+        ))
+      ) : (
+        <p className={subClass}>No classes yet. Add your first one below.</p>
+      )}
+
+      <ShButton className="w-full" onClick={add}>
+        + Add a class
+      </ShButton>
+
+      <p className="mt-3 text-[13px] text-sh-mut">
+        Letter grades use a common US scale (A 93+, A- 90, B+ 87 …). Honors adds 0.5 and AP adds 1.0 to the
+        weighted GPA. Your school's scale may differ.
+      </p>
+    </div>
+  );
+}
