@@ -1,0 +1,202 @@
+import { useState } from 'react';
+import { db, uid } from '@/lib/studyhub/storage';
+import { aiCheckAnswers, aiMakeQuiz } from '@/lib/studyhub/api';
+import { prepareAttachments } from '@/lib/studyhub/files';
+import QuizSetup from './QuizSetup';
+import QuizRunner from './QuizRunner';
+import QuizResults from './QuizResults';
+import QuizHistory from './QuizHistory';
+
+export default function QuizTab() {
+  const [phase, setPhase] = useState('setup');
+  const [quiz, setQuiz] = useState(null);
+  const [history, setHistory] = useState(() => db.get('qhist', []));
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState('');
+  const [error, setError] = useState('');
+
+  const saveHistory = (list) => {
+    const trimmed = list.slice(0, 40);
+    setHistory(trimmed);
+    db.set('qhist', trimmed);
+  };
+
+  async function generate(opts, files, miss = []) {
+    setBusy(true);
+    setError('');
+    setStatus('Building it — this can take up to a minute.');
+    try {
+      const { fileUrls, texts } = await prepareAttachments(files);
+      const data = await aiMakeQuiz({
+        desc: opts.desc,
+        format: opts.fmt,
+        ap: opts.ap,
+        count: opts.n,
+        difficulty: opts.diff,
+        style: opts.style,
+        useFileQuestions: opts.ext,
+        miss,
+        fileUrls,
+        texts
+      });
+      const items = data.questions || [];
+      if (!items.length) throw new Error('The AI returned an empty quiz. Try again.');
+      setQuiz({
+        id: uid(),
+        title: data.title || 'Practice quiz',
+        items,
+        i: 0,
+        ans: {},
+        chk: {},
+        work: {},
+        round: opts.round || 1,
+        opts
+      });
+      setStatus('');
+      setPhase('run');
+    } catch (e) {
+      setError(e.message || 'Something went wrong.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function retake(entry) {
+    const opts = { ...entry.opts, round: (entry.round || 1) + 1, ext: false };
+    let miss = [];
+    if (entry.wrong && entry.wrong.length) {
+      miss = entry.wrong;
+      opts.n = Math.min(15, Math.max(5, entry.wrong.length * 2));
+    } else {
+      opts.diff = 'Hard';
+      opts.n = entry.total || 10;
+    }
+    generate(opts, [], miss);
+  }
+
+  async function finish() {
+    setBusy(true);
+    setError('');
+    setStatus('Grading your answers…');
+    try {
+      const results = {};
+      quiz.items.forEach((q, i) => {
+        if (q.type === 'mcq') results[i] = { ok: quiz.ans[i] === q.a };
+      });
+
+      const written = quiz.items.map((q, i) => ({ q, i })).filter(({ q }) => q.type !== 'mcq');
+      const todo = written.filter(({ i }) => String(quiz.ans[i] || '').trim());
+      written.forEach(({ i }) => {
+        if (!todo.some((t) => t.i === i)) results[i] = { ok: false, fb: 'No answer given.' };
+      });
+
+      if (todo.length) {
+        const data = await aiCheckAnswers({
+          items: todo.map(({ i, q }) => ({
+            i,
+            question: q.q,
+            model: String(q.a ?? ''),
+            rubric: q.rubric || '',
+            student: String(quiz.ans[i])
+          }))
+        });
+        (data.results || []).forEach((g) => {
+          results[g.i] = { ok: g.score >= 0.7, fb: g.fb };
+        });
+      }
+
+      const wrong = quiz.items
+        .map((q, i) => ({ q, i }))
+        .filter(({ i }) => !results[i] || !results[i].ok)
+        .map(({ q, i }) => ({
+          topic: q.topic || '',
+          q: q.q,
+          a: q.type === 'mcq' ? q.options[q.a] : String(q.a ?? ''),
+          yours:
+            q.type === 'mcq'
+              ? quiz.ans[i] != null
+                ? q.options[quiz.ans[i]]
+                : ''
+              : quiz.ans[i] || ''
+        }));
+
+      const score = quiz.items.length - wrong.length;
+      saveHistory([
+        {
+          id: quiz.id,
+          title: quiz.title,
+          date: Date.now(),
+          round: quiz.round,
+          total: quiz.items.length,
+          score,
+          wrong,
+          opts: quiz.opts
+        },
+        ...history
+      ]);
+
+      setQuiz({ ...quiz, res: results, wrong, score });
+      setStatus('');
+      setPhase('results');
+    } catch (e) {
+      setError(e.message || 'Something went wrong.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className={phase === 'setup' ? 'block' : 'hidden'}>
+        <QuizSetup
+          busy={busy}
+          status={status}
+          error={error}
+          onBuild={(opts, files) => generate(opts, files)}
+        />
+        <QuizHistory
+          history={history}
+          busy={busy}
+          onRetake={retake}
+          onDelete={(id) => saveHistory(history.filter((entry) => entry.id !== id))}
+        />
+      </div>
+
+      <div className={phase === 'run' && quiz ? 'block' : 'hidden'}>
+        {quiz ? (
+          <QuizRunner
+            quiz={quiz}
+            onChange={setQuiz}
+            onFinish={finish}
+            busy={busy}
+            status={status}
+            error={error}
+          />
+        ) : null}
+      </div>
+
+      <div className={phase === 'results' && quiz && quiz.res ? 'block' : 'hidden'}>
+        {quiz && quiz.res ? (
+          <QuizResults
+            quiz={quiz}
+            busy={busy}
+            status={status}
+            error={error}
+            onRetake={() =>
+              retake({
+                wrong: quiz.wrong,
+                opts: quiz.opts,
+                total: quiz.items.length,
+                round: quiz.round
+              })
+            }
+            onNew={() => {
+              setQuiz(null);
+              setPhase('setup');
+            }}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
