@@ -1,0 +1,76 @@
+import { useState } from 'react';
+import TabBar from '@/components/studyhub/TabBar';
+import QuizTab from '@/components/studyhub/quiz/QuizTab';
+import GuidesTab from '@/components/studyhub/guides/GuidesTab';
+import GradesTab from '@/components/studyhub/grades/GradesTab';
+import WritingTab from '@/components/studyhub/writing/WritingTab';
+import AnswersTab from '@/components/studyhub/answers/AnswersTab';
+import SugaiTab from '@/components/studyhub/sugai/SugaiTab';
+import { db } from '@/lib/studyhub/storage';
+
+const TAB_IDS = ['quiz', 'guide', 'gpa', 'write', 'hw', 'chat'];
+
+export default function StudyHub() {
+  const [tab, setTab] = useState(() => {
+    const saved = db.get('tab', 'quiz');
+    return TAB_IDS.includes(saved) ? saved : 'quiz';
+  });
+  const [confirmWipe, setConfirmWipe] = useState(false);
+
+  const change = (next) => {
+    setTab(next);
+    db.set('tab', next);
+    window.scrollTo(0, 0);
+  };
+
+  const wipe = () => {
+    if (!confirmWipe) {
+      setConfirmWipe(true);
+      return;
+    }
+    db.clear();
+    window.location.reload();
+  };
+
+  return (
+    <div className="min-h-[100dvh] bg-sh-bg font-body text-sh-ink">
+      <div className="mx-auto max-w-[760px] px-4 pb-[calc(66px+env(safe-area-inset-bottom))] pt-[calc(12px+env(safe-area-inset-top))]">
+        <header className="mb-4 flex items-center gap-2.5 border-b border-sh-line pb-3.5 pt-1.5 print:hidden">
+          <div className="grid h-[30px] w-[30px] place-items-center rounded-[9px] bg-sh-ink text-[14px] font-extrabold text-sh-bg">
+            S
+          </div>
+          <b className="text-[18px] tracking-[-0.4px]">StudyHub</b>
+          <span className="ml-auto hidden text-[12px] text-sh-mut sm:inline">Your data stays on this device</span>
+        </header>
+
+        <div className={tab === 'quiz' ? 'block' : 'hidden'}>
+          <QuizTab />
+        </div>
+        <div className={tab === 'guide' ? 'block' : 'hidden'}>
+          <GuidesTab />
+        </div>
+        <div className={tab === 'gpa' ? 'block' : 'hidden'}>
+          <GradesTab />
+        </div>
+        <div className={tab === 'write' ? 'block' : 'hidden'}>
+          <WritingTab />
+        </div>
+        <div className={tab === 'hw' ? 'block' : 'hidden'}>
+          <AnswersTab />
+        </div>
+        <div className={tab === 'chat' ? 'block' : 'hidden'}>
+          <SugaiTab />
+        </div>
+
+        <footer className="mt-5 text-center text-[11px] text-sh-mut print:hidden">
+          StudyHub ·{' '}
+          <button type="button" onClick={wipe} className="underline underline-offset-2">
+            {confirmWipe ? 'Tap again to ERASE everything on this device' : 'Erase all my data on this device'}
+          </button>
+        </footer>
+      </div>
+
+      <TabBar active={tab} onChange={change} />
+    </div>
+  );
+}
