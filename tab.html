@@ -1,0 +1,34 @@
+import { CheckCheck, LayoutList, Pencil, Percent, Pilcrow, Sparkles } from 'lucide-react';
+import { cn } from '@/lib/utils';
+
+export const TABS = [
+  { id: 'quiz', label: 'Quiz', Icon: Pencil },
+  { id: 'guide', label: 'Guides', Icon: LayoutList },
+  { id: 'gpa', label: 'Grades', Icon: Percent },
+  { id: 'write', label: 'Writing', Icon: Pilcrow },
+  { id: 'hw', label: 'Answers', Icon: CheckCheck },
+  { id: 'chat', label: 'SugAI', Icon: Sparkles }
+];
+
+export default function TabBar({ active, onChange }) {
+  return (
+    <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-sh-line bg-sh-card print:hidden">
+      <div className="mx-auto flex max-w-[760px] pb-[env(safe-area-inset-bottom)]">
+        {TABS.map(({ id, label, Icon }) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => onChange(id)}
+            className={cn(
+              'flex flex-1 flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-[10.5px] font-semibold transition',
+              active === id ? 'text-sh-ink' : 'text-sh-mut hover:text-sh-ink'
+            )}
+          >
+            <Icon className="h-[19px] w-[19px]" strokeWidth={active === id ? 2.4 : 2} />
+            {label}
+          </button>
+        ))}
+      </div>
+    </nav>
+  );
+}
