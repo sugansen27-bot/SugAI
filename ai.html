@@ -1,0 +1,226 @@
+import { useEffect, useRef, useState } from 'react';
+import { Image as ImageIcon, Menu, Paperclip, Plus, Send, X } from 'lucide-react';
+import ChatDrawer from './ChatDrawer';
+import MessageBubble from './MessageBubble';
+import ShButton from '../ShButton';
+import ShStatus from '../ShStatus';
+import { aiChat, aiDraw } from '@/lib/studyhub/api';
+import { ACCEPT, MAX_FILES, prepareAttachments } from '@/lib/studyhub/files';
+import { db, uid } from '@/lib/studyhub/storage';
+import { cardClass, chipClass, h2Class, inputClass, subClass } from '@/lib/studyhub/ui';
+
+export default function SugaiTab() {
+  const [chats, setChats] = useState(() => db.get('chats', []));
+  const [curId, setCurId] = useState(() => db.get('cur', null));
+  const [input, setInput] = useState('');
+  const [files, setFiles] = useState([]);
+  const [imgMode, setImgMode] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState('');
+  const [drawer, setDrawer] = useState(false);
+  const fileInput = useRef(null);
+  const endRef = useRef(null);
+
+  const current = chats.find((c) => c.id === curId) || null;
+  const msgs = current ? current.msgs : [];
+
+  useEffect(() => {
+    db.set('chats', chats);
+  }, [chats]);
+
+  useEffect(() => {
+    db.set('cur', curId);
+  }, [curId]);
+
+  useEffect(() => {
+    if (endRef.current && endRef.current.offsetParent) endRef.current.scrollIntoView({ block: 'end' });
+  }, [msgs.length, sending]);
+
+  async function send() {
+    if (sending) return;
+    const promptText =
+      input.trim() ||
+      (files.length
+        ? 'Read the attached file(s). Answer every question in them, and if there are none, summarize them.'
+        : '');
+    if (!promptText) return;
+
+    const attachments = [...files];
+    const existing = current;
+    const chatId = existing ? existing.id : uid();
+    const before = existing ? existing.msgs : [];
+    const userMsg = { r: 'user', t: promptText, files: attachments.map((f) => f.name || 'photo') };
+    const after = [...before, userMsg];
+
+    setInput('');
+    setFiles([]);
+    setError('');
+    setSending(true);
+
+    setChats((prev) =>
+      existing
+        ? prev.map((c) => (c.id === chatId ? { ...c, msgs: after } : c))
+        : [{ id: chatId, title: promptText.slice(0, 40), msgs: after, ts: Date.now() }, ...prev]
+    );
+    if (!existing) setCurId(chatId);
+
+    try {
+      const { fileUrls, texts } = await prepareAttachments(attachments);
+      if (imgMode) {
+        const data = await aiDraw({ prompt: promptText });
+        setChats((prev) =>
+          prev.map((c) =>
+            c.id === chatId
+              ? { ...c, msgs: [...after, { r: 'assistant', t: '', img: data.url, cap: promptText }] }
+              : c
+          )
+        );
+      } else {
+        const history = after
+          .map((m) => ({
+            role: m.r === 'assistant' ? 'assistant' : 'user',
+            content: m.t || `[generated an image: ${m.cap}]`
+          }))
+          .slice(-24);
+        const data = await aiChat({ messages: history, fileUrls, texts });
+        setChats((prev) =>
+          prev.map((c) =>
+            c.id === chatId ? { ...c, msgs: [...after, { r: 'assistant', t: data.reply }] } : c
+          )
+        );
+      }
+    } catch (e) {
+      setError(e.message || 'Something went wrong.');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const newChat = () => {
+    const chat = { id: uid(), title: 'New chat', msgs: [], ts: Date.now() };
+    setChats((prev) => [chat, ...prev]);
+    setCurId(chat.id);
+  };
+
+  const deleteMsg = (index) => {
+    if (!current) return;
+    setChats((prev) =>
+      prev.map((c) => (c.id === current.id ? { ...c, msgs: c.msgs.filter((_, i) => i !== index) } : c))
+    );
+  };
+
+  const deleteChat = (id) => {
+    setChats((prev) => prev.filter((c) => c.id !== id));
+    if (curId === id) {
+      setCurId((chats.find((c) => c.id !== id) || {}).id || null);
+    }
+  };
+
+  const deleteAll = () => {
+    setChats([]);
+    setCurId(null);
+    setDrawer(false);
+  };
+
+  return (
+    <div>
+      <div className="mb-2.5 flex items-center gap-2">
+        <ShButton variant="ghost" size="sm" onClick={() => setDrawer(true)}>
+          <Menu className="h-3.5 w-3.5" /> Chats
+        </ShButton>
+        <b className="flex-1 truncate">{current ? current.title : 'SugAI'}</b>
+        <ShButton variant="ghost" size="sm" onClick={newChat}>
+          <Plus className="h-3.5 w-3.5" /> New
+        </ShButton>
+      </div>
+
+      {msgs.length ? (
+        msgs.map((m, i) => <MessageBubble key={i} msg={m} onDelete={() => deleteMsg(i)} />)
+      ) : (
+        <div className={`${cardClass} text-center`}>
+          <h2 className={h2Class}>Hi, I'm SugAI ✦</h2>
+          <p className={`${subClass} mt-1`}>
+            Ask me anything — homework, how black holes form, what to cook, or an explanation you can actually
+            follow. Tap the picture button to have me draw something from a description. Unlimited questions.
+          </p>
+        </div>
+      )}
+
+      {sending ? <p className={`${subClass} my-2`}>Thinking…</p> : null}
+      {error ? <ShStatus message={error} error /> : null}
+      <div ref={endRef} />
+
+      <div className="sticky bottom-[calc(66px+env(safe-area-inset-bottom))] z-10 bg-sh-bg pt-2">
+        {files.length ? (
+          <div className="mb-1.5 flex flex-wrap gap-2">
+            {files.map((file, i) => (
+              <button
+                key={`${file.name || 'file'}-${i}`}
+                type="button"
+                className={chipClass}
+                onClick={() => setFiles(files.filter((_, k) => k !== i))}
+              >
+                <span className="max-w-[150px] truncate">{String(file.name || 'photo').slice(0, 24)}</span>
+                <X className="h-3 w-3 shrink-0" />
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="flex items-end gap-1.5 pb-2">
+          <ShButton variant="ghost" aria-label="Attach a photo or file" onClick={() => fileInput.current?.click()}>
+            <Paperclip className="h-4 w-4" />
+          </ShButton>
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            accept={ACCEPT}
+            className="hidden"
+            onChange={(e) => {
+              setFiles((prev) => [...prev, ...Array.from(e.target.files || [])].slice(0, MAX_FILES));
+              e.target.value = '';
+            }}
+          />
+          <ShButton
+            variant="ghost"
+            aria-label="Generate an image"
+            className={imgMode ? 'ring-2 ring-sh-ink' : ''}
+            onClick={() => setImgMode((v) => !v)}
+          >
+            <ImageIcon className="h-4 w-4" />
+          </ShButton>
+          <textarea
+            rows={1}
+            className={`${inputClass} max-h-[130px] min-h-[44px] flex-1 resize-none py-3`}
+            placeholder={imgMode ? 'Describe the image you want…' : 'Ask SugAI anything…'}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && !window.matchMedia('(pointer: coarse)').matches) {
+                e.preventDefault();
+                send();
+              }
+            }}
+          />
+          <ShButton onClick={send} disabled={sending} aria-label="Send">
+            <Send className="h-4 w-4" />
+          </ShButton>
+        </div>
+      </div>
+
+      <ChatDrawer
+        open={drawer}
+        chats={chats}
+        currentId={curId}
+        onOpen={(id) => {
+          setCurId(id);
+          setDrawer(false);
+        }}
+        onDelete={deleteChat}
+        onDeleteAll={deleteAll}
+        onClose={() => setDrawer(false)}
+      />
+    </div>
+  );
+}
